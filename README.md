@@ -17,7 +17,7 @@ A graphical fan speed monitor and controller for Lenovo ThinkPad laptops running
 
 ## Screenshots
 
-> *Coming soon*
+![ThinkPad Fan Control](assets/screenshot.png)
 
 ## Requirements
 

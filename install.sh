@@ -143,8 +143,18 @@ setup_module() {
         echo "options thinkpad_acpi fan_control=1" | sudo tee "$conf" > /dev/null
         ok "Written: $conf"
     fi
-    # Apply without reboot
-    echo 1 | sudo tee /sys/module/thinkpad_acpi/parameters/fan_control > /dev/null 2>&1 || true
+    # Apply without reboot: try sysfs first, fall back to module reload
+    if echo 1 | sudo tee /sys/module/thinkpad_acpi/parameters/fan_control > /dev/null 2>&1; then
+        ok "fan_control=1 applied (no reboot needed)."
+    else
+        info "Reloading thinkpad_acpi module to apply fan_control=1..."
+        sudo modprobe -r thinkpad_acpi 2>/dev/null || true
+        if sudo modprobe thinkpad_acpi fan_control=1; then
+            ok "Module reloaded with fan_control=1."
+        else
+            warn "Could not reload thinkpad_acpi. A reboot may be required."
+        fi
+    fi
 }
 
 # ── install helper script + sudoers ──────────────────────────────────────────

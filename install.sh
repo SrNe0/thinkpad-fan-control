@@ -53,8 +53,34 @@ install_deps() {
                                 python3-pillow python3-pystray python3-gobject
             ;;
         pacman)
-            sudo pacman -Sy --noconfirm thinkfan python-matplotlib \
-                                        python-pillow python-pystray python-gobject
+            # thinkfan is AUR-only — need an AUR helper
+            AUR_HELPER=""
+            if command -v yay &>/dev/null; then AUR_HELPER="yay"
+            elif command -v paru &>/dev/null; then AUR_HELPER="paru"
+            fi
+
+            # --needed skips packages already installed
+            sudo pacman -Sy --needed --noconfirm python-matplotlib python-pillow \
+                                                 python-pystray python-gobject tk
+
+            if [[ -n "$AUR_HELPER" ]]; then
+                if pacman -Q thinkfan &>/dev/null; then
+                    ok "thinkfan already installed — skipping."
+                else
+                    info "Installing thinkfan from AUR via $AUR_HELPER..."
+                    "$AUR_HELPER" -S --needed --noconfirm thinkfan
+                fi
+            else
+                if pacman -Q thinkfan &>/dev/null; then
+                    ok "thinkfan already installed."
+                else
+                    warn "thinkfan is an AUR package and requires an AUR helper."
+                    warn "Install yay or paru first:"
+                    warn "  https://github.com/Jguer/yay"
+                    warn "Then re-run this installer."
+                    error "No AUR helper found (yay/paru). Install one and re-run."
+                fi
+            fi
             ;;
         zypper)
             sudo zypper install -y thinkfan python3-tk python3-matplotlib \

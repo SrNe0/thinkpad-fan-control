@@ -41,6 +41,18 @@ The installer automatically:
 5. Enables and starts the `thinkfan` systemd service
 6. Creates an app menu entry and autostart entry
 
+### Arch Linux
+
+`thinkfan` is an AUR package on Arch. You need **yay** or **paru** installed before running the installer:
+
+```bash
+# Install yay if you don't have an AUR helper
+sudo pacman -S --needed git base-devel
+git clone https://aur.archlinux.org/yay.git && cd yay && makepkg -si
+```
+
+Then run `bash install.sh` normally — it will detect yay/paru automatically.
+
 ### Wayland / Hyprland
 
 The app works on Wayland. For the system tray icon you need a tray-compatible bar:
@@ -69,7 +81,7 @@ Switching profiles in Auto mode immediately rewrites `/etc/thinkfan.conf` and re
 |--------|----------------|--------|
 | Ubuntu / Linux Mint | apt | Tested |
 | Fedora | dnf | Should work |
-| Arch Linux | pacman | Should work |
+| Arch Linux | pacman + yay/paru | Should work (requires AUR helper) |
 | openSUSE | zypper | Should work |
 
 ## How It Works

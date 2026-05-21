@@ -276,7 +276,44 @@ setup_service() {
     fi
 }
 
+# ── uninstall ────────────────────────────────────────────────────────────────
+do_uninstall() {
+    echo -e "\n${BOLD}${YELLOW}Uninstalling ThinkPad Fan Control...${NC}\n"
+
+    # Kill running instance
+    pkill -f "thinkfan-control.py" 2>/dev/null && ok "App process stopped." || true
+
+    # Stop and disable thinkfan service
+    if systemctl is-enabled --quiet thinkfan 2>/dev/null; then
+        sudo systemctl disable --now thinkfan && ok "thinkfan service disabled."
+    fi
+
+    # Remove privileged files
+    [[ -f /usr/local/bin/thinkfan-set-level ]] && \
+        sudo rm /usr/local/bin/thinkfan-set-level && ok "Removed helper script."
+    [[ -f /etc/sudoers.d/thinkfan-gui ]] && \
+        sudo rm /etc/sudoers.d/thinkfan-gui && ok "Removed sudoers rule."
+    [[ -f /etc/modprobe.d/thinkpad.conf ]] && \
+        sudo rm /etc/modprobe.d/thinkpad.conf && ok "Removed modprobe config."
+
+    # Remove app files
+    rm -rf "$REAL_HOME/.local/share/thinkpad-fan-control"
+    rm -f  "$REAL_HOME/.local/share/applications/thinkfan-control.desktop"
+    rm -f  "$REAL_HOME/.config/autostart/thinkfan-control.desktop"
+    rm -rf "$REAL_HOME/.config/thinkfan-gui"
+
+    echo ""
+    echo -e "${BOLD}${GREEN}Uninstall complete.${NC}"
+    echo -e "thinkfan package and /etc/thinkfan.conf were left in place."
+    echo -e "Remove manually if needed: ${CYAN}sudo pacman -R thinkfan${NC} / ${CYAN}sudo apt remove thinkfan${NC}"
+    exit 0
+}
+
 # ── main ─────────────────────────────────────────────────────────────────────
+if [[ "${1:-}" == "--uninstall" ]]; then
+    do_uninstall
+fi
+
 PM=$(detect_distro)
 info "Detected package manager: $PM"
 

@@ -194,6 +194,21 @@ PROFILES = {
     "turbo":       ("Turbo",        C_RED,     "Enfriamiento máximo, más ruidoso"),
 }
 
+# ── profile thresholds (CPU upper °C per level 0-7) ───────────────────────────
+PROFILE_THRESHOLDS = {
+    "silencioso":  [57, 63, 69, 75, 81, 87, 92, 999],
+    "normal":      [50, 55, 60, 65, 70, 75, 80, 999],
+    "rendimiento": [43, 48, 53, 58, 63, 68, 73, 999],
+    "turbo":       [38, 43, 48, 53, 58, 63, 68, 999],
+}
+
+def compute_target(cpu, profile_key):
+    thresholds = PROFILE_THRESHOLDS.get(profile_key, PROFILE_THRESHOLDS["rendimiento"])
+    for level, upper in enumerate(thresholds):
+        if cpu <= upper:
+            return level
+    return 7
+
 # ── persistence ───────────────────────────────────────────────────────────────
 def load_saved_profile():
     try:
@@ -326,6 +341,47 @@ class Collector(threading.Thread):
             self.state.update(cpu, gpu, rpm, fan.get("level", "—"), thinkfan_active())
             time.sleep(2)
 
+# ── smooth fan controller ─────────────────────────────────────────────────────
+class SmoothController(threading.Thread):
+    """Steps fan level one notch at a time toward the profile target."""
+    STEP_UP   = 2.0   # seconds between upward steps (fast to cool)
+    STEP_DOWN = 4.0   # seconds between downward steps (slow to spin down)
+    POLL      = 2.0   # seconds between checks when already at target
+
+    def __init__(self, state, profile_getter):
+        super().__init__(daemon=True)
+        self._stopper = threading.Event()
+        self.state = state
+        self.profile_getter = profile_getter
+        self.current_level = 0
+
+    def stop(self):
+        self._stopper.set()
+
+    def run(self):
+        self._stopper.clear()
+        try:
+            self.current_level = int(read_fan().get("level", "0"))
+        except ValueError:
+            self.current_level = 0
+
+        while not self._stopper.is_set():
+            cpu, *_ = self.state.snapshot()
+            if cpu is not None:
+                target = compute_target(cpu, self.profile_getter())
+                if self.current_level < target:
+                    self.current_level += 1
+                    run_helper("level", str(self.current_level))
+                    self._stopper.wait(self.STEP_UP)
+                elif self.current_level > target:
+                    self.current_level -= 1
+                    run_helper("level", str(self.current_level))
+                    self._stopper.wait(self.STEP_DOWN)
+                else:
+                    self._stopper.wait(self.POLL)
+            else:
+                self._stopper.wait(self.POLL)
+
 # ── main window ───────────────────────────────────────────────────────────────
 class MainWindow(tk.Tk):
     def __init__(self, state, on_quit):
@@ -337,9 +393,11 @@ class MainWindow(tk.Tk):
         self.resizable(False, False)
         self.protocol("WM_DELETE_WINDOW",
                       self._hide if HAS_TRAY else on_quit)
+        self._smooth = None
         self._apply_theme()
         self._build()
         self._tick()
+        self.after(300, self._to_auto)
 
     def _hide(self): self.withdraw()
     def show(self):
@@ -487,17 +545,11 @@ class MainWindow(tk.Tk):
     def _select_profile(self, key):
         save_profile(key)
         self._update_profile_desc(key)
-        if self.mode.get() == "auto":
-            self._apply_profile_now(key)
-
-    def _apply_profile_now(self, key):
-        result = write_tmp_config(key)
-        if result is not True:
-            messagebox.showerror("Error", f"No se pudo escribir config: {result}")
-            return
+        if write_tmp_config(key) is True:
+            threading.Thread(target=lambda: run_helper("write-config"),
+                             daemon=True).start()
         label, _, _ = PROFILES[key]
-        self.status.config(text=f"Aplicando perfil {label}…")
-        self._run_async_cmd("apply-config")
+        self.status.config(text=f"Perfil  {label}")
 
     # ── mode actions ──────────────────────────────────────────────────────────
     def _btns(self, s):
@@ -511,13 +563,24 @@ class MainWindow(tk.Tk):
             self.after(0, lambda: self.status.config(text=msg))
         threading.Thread(target=task, daemon=True).start()
 
+    def _stop_smooth(self):
+        if self._smooth and self._smooth.is_alive():
+            self._smooth.stop()
+        self._smooth = None
+
     def _to_auto(self):
         self._btns("disabled")
-        self._apply_profile_now(self.profile_var.get())
+        self._stop_smooth()
+        def task():
+            run_helper("stop-service")
+            self._smooth = SmoothController(self.state, lambda: self.profile_var.get())
+            self._smooth.start()
+        threading.Thread(target=task, daemon=True).start()
 
     def _to_manual(self):
+        self._stop_smooth()
         self._btns("normal")
-        self.status.config(text="Deteniendo thinkfan…")
+        self.status.config(text="Modo manual — elige un nivel")
         self._run_async_cmd("stop-service")
 
     def _set_level(self, lvl):
@@ -527,6 +590,9 @@ class MainWindow(tk.Tk):
     # ── refresh loop ──────────────────────────────────────────────────────────
     def _tick(self):
         cpu, gpu, rpm, lvl, active, h_cpu, h_gpu, h_rpm = self.state.snapshot()
+        smooth_ok = self._smooth is not None and self._smooth.is_alive()
+        if smooth_ok:
+            lvl = str(self._smooth.current_level)
 
         cpu_txt = f"{cpu}°C" if cpu is not None else "--°C"
         gpu_txt = f"{gpu}°C" if gpu is not None else "--°C"
@@ -535,13 +601,13 @@ class MainWindow(tk.Tk):
         self.lbl_rpm.config(text=f"{rpm or '—':>4} RPM")
         self.lbl_lvl.config(text=f"Nivel  {lvl}")
         self.lbl_svc.config(
-            text="● activo" if active else "● inactivo",
-            fg=C_GREEN if active else C_RED)
+            text="● auto suave" if smooth_ok else ("● thinkfan" if active else "● inactivo"),
+            fg=C_GREEN if (smooth_ok or active) else C_RED)
 
-        expected = "auto" if active else "manual"
+        expected = "auto" if smooth_ok else "manual"
         if self.mode.get() != expected:
             self.mode.set(expected)
-            self._btns("disabled" if active else "normal")
+            self._btns("disabled" if smooth_ok else "normal")
 
         n = len(h_cpu)
         if n > 1:
